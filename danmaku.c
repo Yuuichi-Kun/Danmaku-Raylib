@@ -126,31 +126,77 @@ static float Clampf(float value, float min, float max) {
 }
 
 // HUD
-int DrawHUD(void) {
+static void DrawHUD(void) {
     // Right Border
-    DrawRectangle(PLAY_X + PLAY_W, 0, SCREEN_W - PLAY_X - PLAY_W, SCREEN_H, (Color){15, 10, 25, 255});
-    DrawRectangleLines(PLAY_X + PLAY_W, 0, SCREEN_W - PLAY_X - PLAY_W, SCREEN_H, DARKGRAY);
+    DrawRectangle(PLAY_X + PLAY_W, 0, SCREEN_W - (PLAY_X + PLAY_W), SCREEN_H, (Color){15, 10, 25, 255});
+    DrawRectangleLines(PLAY_X + PLAY_W, 0, SCREEN_W - (PLAY_X + PLAY_W), SCREEN_H, DARKGRAY);
 
     // Left Border
     DrawRectangle(0, 0, PLAY_X, SCREEN_H, (Color){15, 10, 25, 255});
     DrawRectangleLines(0, 0, PLAY_X, SCREEN_H, DARKGRAY);
 }
 
+static void DrawBackground(void) {
+    static float starY[80] = {0};
+    static bool starsInit = false;
+
+        if (!starsInit) {
+            for (int i = 0; i < 80; i++) {
+                starY[i] = (float)GetRandomValue(0, SCREEN_H);
+        }
+        starsInit = true;
+    }
+    
+    ClearBackground((Color){5, 0, 15, 255});
+
+    for (int i = 0; i < 80; i++) {
+        starY[i] += 0.8f + (i % 3) * 0.4f;
+
+        if (starY[i] > SCREEN_H) starY[i] = 0;
+
+        int x = (i * 173 + 31) % PLAY_W + PLAY_X;
+
+        int b = 120 + (i % 5) * 27;
+        DrawPixel(x, (int)starY[i], (Color){b, b, b, 255});
+    }
+}
+
+int GameInit(void) {
+}
+
+// Main Game Loop
 int main(void) {
     InitWindow(SCREEN_W, SCREEN_H, "Danmaku Game");
     InitAudioDevice();
     
-    Music music = LoadMusicStream("assets/Touhou 7 - Paradise  Deep Mountain (Stage 1).mp3");
-    music.looping = true;
-    PlayMusicStream(music);
+    Music musicEnemy = LoadMusicStream("assets/Touhou 7 - Paradise  Deep Mountain (Stage 1).mp3");
+    Music musicBoss = LoadMusicStream("assets/Touhou 7 - Letty Whiterock's Theme - Crystallized Silver (Boss 1).mp3");
+
+    Music currentTrack = musicEnemy;
+    PlayMusicStream(musicEnemy);
+
+    float musicSwitchTimer = 0.0f;
+    float musicSwitchInterval = 120.0f; // Switch tracks every 120 seconds
+    bool musicSwitched = false;
 
     SetTargetFPS(60);
 
-    while (!WindowShouldClose()) {
-        UpdateMusicStream(music);
+    GameInit();
 
+    while (!WindowShouldClose()) {
+        UpdateMusicStream(currentTrack);
+        if (!musicSwitched) {
+            musicSwitchTimer += GetFrameTime();
+            if (musicSwitchTimer >= musicSwitchInterval) {
+                StopMusicStream(currentTrack);
+                currentTrack = musicBoss;
+                PlayMusicStream(currentTrack);
+                musicSwitched = true;
+            }
+        }
         BeginDrawing();
 
+        DrawBackground();
         DrawHUD();
         ClearBackground((Color){20, 20, 40, 255});
         DrawText("Window OK — You can see the border now", 60, SCREEN_H / 2 - 10, 18,
@@ -159,7 +205,8 @@ int main(void) {
         EndDrawing();
     }
     
-    UnloadMusicStream(music);
+    UnloadMusicStream(musicEnemy);
+    UnloadMusicStream(musicBoss);
     CloseAudioDevice();
     CloseWindow();
     return 0;
