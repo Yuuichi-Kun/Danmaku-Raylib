@@ -22,6 +22,7 @@
 #define PLAYER_RADIUS 5.0f
 #define PLAYER_GFX_R 14.0f
 #define FPS 60
+#define WAVE_COUNT (sizeof(WAVES) / sizeof(WAVES[0]))
 
 typedef enum {
     PHASE_WIN,
@@ -36,6 +37,25 @@ typedef enum {
     ATTACK_AIMED,
     ATTACK_RING
 } BossAttack;
+
+typedef enum {
+    ENTER_TOP,
+    ENTER_LEFT,
+    ENTER_RIGHT
+} EnemyEnter;
+
+typedef enum {
+    EXIT_BOTTOM,
+    EXIT_LEFT,
+    EXIT_RIGHT,
+    EXIT_TOP
+} EnemyExit;
+
+typedef enum {
+    MOVE_HOVER,
+    MOVE_SWEEP,
+    MOVE_ZIGZAG
+} EnemyMove;
 
 // Blueprint
 
@@ -71,8 +91,16 @@ typedef struct {
     float shootTimer;
     float shootInterval;
     float moveTimer;
+    float stayTimer;
+    float stayDuration;
+    bool leaving;
     bool active;
     Color color;
+    EnemyEnter enterDir;
+    EnemyExit exitDir;
+    EnemyMove moveType;
+    float baseX;
+    float baseY;
 } Enemy;
 
 typedef struct {
@@ -98,6 +126,22 @@ typedef struct {
     bool active;
 } Particle;
 
+typedef struct {
+    float spawnTime;
+    int startIndex;
+    int count;
+    float startX;
+    float spacingX;
+    float startY;
+    float targetY;
+    float shootInterval;
+    float stayDuration;
+    Color color;
+    EnemyEnter enterDir;
+    EnemyExit exitDir;
+    EnemyMove moveType;
+} EnemyWave;
+
 #define MAX_PARTICLES 256
 
 // Global State
@@ -110,8 +154,9 @@ static Boss         boss;
 static Particle     particles[MAX_PARTICLES];
 static GamePhase    phase;
 static int          score;
-static float        stgTimer;    // counts how long the player has survived (for scoring)
+static float        stgTimer;    // Hitung sudah berapa lama karakter hidup untuk score
 static bool         paused;
+static int          nextWave = 0;
 
 // Fungsi Pembantu
 static float Dist(Vector2 a, Vector2 b) {
@@ -131,6 +176,30 @@ static float Clampf(float value, float min, float max) {
     if (value > max) return max;
     return value;
 }
+
+static const EnemyWave WAVES[] = {
+    // time,  idx, cnt, startX,        spacingX, startY,  targetY, interval, stay, color,                  enter,       exit,        move
+    { 0.0f,   0,   6,  PLAY_X+40.0f,  60.0f,  -60.0f,   110.0f,  2.0f,  5.0f, {255, 80,  120, 255}, ENTER_TOP,   EXIT_BOTTOM, MOVE_HOVER   },
+    { 6.0f,   6,   6,  PLAY_X+40.0f,  60.0f, -180.0f,   185.0f,  2.5f,  5.0f, {255, 160,  60, 255}, ENTER_TOP,   EXIT_BOTTOM, MOVE_HOVER   },
+    { 18.0f,  0,   5,  -60.0f,        0.0f,    80.0f,   130.0f,  2.0f,  6.0f, {100, 180, 255, 255}, ENTER_LEFT,  EXIT_RIGHT,  MOVE_SWEEP   }, // sweep left→right
+    { 24.0f,  6,   5,  PLAY_X+PLAY_W+60.0f, 0.0f, 185.0f, 185.0f, 2.0f, 6.0f, {180, 100, 255, 255}, ENTER_RIGHT, EXIT_LEFT,   MOVE_SWEEP   }, // sweep right→left
+    { 36.0f,  0,   6,  PLAY_X+40.0f,  60.0f,  -60.0f,   110.0f,  1.8f,  4.0f, {255,  80, 120, 255}, ENTER_TOP,   EXIT_LEFT,   MOVE_HOVER   }, // exit left
+    { 42.0f,  6,   6,  PLAY_X+40.0f,  60.0f, -180.0f,   185.0f,  1.8f,  4.0f, {255, 220,  60, 255}, ENTER_TOP,   EXIT_RIGHT,  MOVE_HOVER   }, // exit right
+    { 54.0f,  0,   4,  -60.0f,        0.0f,    60.0f,   148.0f,  1.5f,  5.0f, {60,  220, 180, 255}, ENTER_LEFT,  EXIT_BOTTOM, MOVE_ZIGZAG  }, // from left, zigzag
+    { 54.0f,  6,   4,  PLAY_X+PLAY_W+60.0f, 0.0f, 60.0f, 220.0f, 1.5f, 5.0f, {255, 120,  60, 255}, ENTER_RIGHT, EXIT_BOTTOM, MOVE_ZIGZAG  }, // from right, zigzag
+    { 70.0f,  0,   6,  PLAY_X+40.0f,  60.0f,  -60.0f,   110.0f,  1.5f,  5.0f, {255,  80, 120, 255}, ENTER_TOP,   EXIT_BOTTOM, MOVE_HOVER   },
+    { 76.0f,  6,   6,  PLAY_X+40.0f,  60.0f, -180.0f,   185.0f,  1.5f,  5.0f, {255, 160,  60, 255}, ENTER_TOP,   EXIT_BOTTOM, MOVE_HOVER   },
+    { 90.0f,  0,   5,  -60.0f,        0.0f,   110.0f,   110.0f,  1.3f,  6.0f, {100, 180, 255, 255}, ENTER_LEFT,  EXIT_RIGHT,  MOVE_SWEEP   },
+    { 96.0f,  6,   5,  PLAY_X+PLAY_W+60.0f, 0.0f, 185.0f, 185.0f, 1.3f, 6.0f, {180, 100, 255, 255}, ENTER_RIGHT, EXIT_LEFT,   MOVE_SWEEP   },
+    { 108.0f, 0,   6,  PLAY_X+40.0f,  60.0f,  -60.0f,   110.0f,  1.3f,  4.0f, {255, 220,  60, 255}, ENTER_TOP,   EXIT_RIGHT,  MOVE_HOVER   },
+    { 108.0f, 6,   6,  PLAY_X+40.0f,  60.0f, -180.0f,   185.0f,  1.3f,  4.0f, {255,  80, 120, 255}, ENTER_TOP,   EXIT_LEFT,   MOVE_HOVER   },
+    { 124.0f, 0,   4,  -60.0f,        0.0f,    80.0f,   148.0f,  1.2f,  5.0f, {60,  220, 180, 255}, ENTER_LEFT,  EXIT_BOTTOM, MOVE_ZIGZAG  },
+    { 124.0f, 6,   4,  PLAY_X+PLAY_W+60.0f, 0.0f, 220.0f, 220.0f, 1.2f, 5.0f, {255, 120,  60, 255}, ENTER_RIGHT, EXIT_BOTTOM, MOVE_ZIGZAG  },
+    { 138.0f, 0,   6,  PLAY_X+40.0f,  60.0f,  -60.0f,   110.0f,  1.1f,  4.0f, {255,  80, 120, 255}, ENTER_TOP,   EXIT_BOTTOM, MOVE_HOVER   },
+    { 144.0f, 6,   6,  PLAY_X+40.0f,  60.0f, -180.0f,   185.0f,  1.1f,  4.0f, {255, 160,  60, 255}, ENTER_TOP,   EXIT_BOTTOM, MOVE_HOVER   },
+    { 153.0f, 0,   6,  PLAY_X+40.0f,  60.0f,  -60.0f,   110.0f,  1.0f,  3.5f, {255, 220, 255, 255}, ENTER_TOP,   EXIT_LEFT,   MOVE_HOVER   },
+    { 153.0f, 6,   6,  PLAY_X+40.0f,  60.0f, -180.0f,   185.0f,  1.0f,  3.5f, {255, 255, 200, 255}, ENTER_TOP,   EXIT_RIGHT,  MOVE_HOVER   },
+};
 
 // NPC Bullets
 static void FireEnemyBullet(Vector2 pos, Vector2 vel, float radius, Color color) {
@@ -249,72 +318,124 @@ static void DrawPlayer(void) {
 
 // Enemies
 static void InitEnemies(void) {
-    for (int i = 0; i < MAX_ENEMIES; i++) {
-        enemies[i].active = false;
-    }
-    // 1st Wave
-    for (int i = 0; i < 6; i++) {
-        enemies[i].pos = (Vector2){PLAY_X + 40.0f + i  * 65.0f, -60.0f - i * 15.0f};
-        enemies[i].radius = 12.0f;
-        enemies[i].hp = enemies[i].maxHp = 5;
-        enemies[i].shootTimer = 1.0f + i * 0.3f;
-        enemies[i].shootInterval = 2.0f;
-        enemies[i].active = true;
-        enemies[i].color = (Color){255, 80, 120, 255};
-    }
-    // 2nd Wave
-    for (int i = 6; i < 12; i++) {
-        enemies[i].pos = (Vector2){PLAY_X + 40.0f + (i - 6) * 60.0f, -180.0f - (i - 6) * 15.0f};
-        enemies[i].radius = 12.0f;
-        enemies[i].hp = enemies[i].maxHp = 5;
-        enemies[i].shootTimer = 1.5f + (i - 6) * 0.2f;
-        enemies[i].shootInterval = 2.5f;
-        enemies[i].active = true;
-        enemies[i].color = (Color){255, 160, 60, 255};
+    for (int i = 0; i < MAX_ENEMIES; i++) enemies[i].active = false;
+    nextWave = 0;
+}
+
+static void SpawnWave(int waveIndex) {
+    const EnemyWave *w = &WAVES[waveIndex];
+    for (int i = 0; i < w->count; i++) {
+        int slot = (w->startIndex + i) % MAX_ENEMIES;
+        Enemy *e = &enemies[slot];
+
+        // Starting position depends on entry direction
+        if (w->enterDir == ENTER_TOP) {
+            e->pos = (Vector2){ w->startX + i * w->spacingX, w->startY - i * 15.0f };
+            e->baseX = w->startX + i * w->spacingX;
+            e->baseY = w->targetY;
+        } else if (w->enterDir == ENTER_LEFT) {
+            // Space enemies vertically when entering from side
+            e->pos = (Vector2){ w->startX, w->targetY + i * 28.0f };
+            e->baseX = PLAY_X + 60.0f + i * 60.0f;  // target X positions spread out
+            e->baseY = w->targetY + i * 28.0f;
+        } else {  // ENTER_RIGHT
+            e->pos = (Vector2){ w->startX, w->targetY + i * 28.0f };
+            e->baseX = PLAY_X + PLAY_W - 60.0f - i * 60.0f;
+            e->baseY = w->targetY + i * 28.0f;
+        }
+
+        e->radius        = 12.0f;
+        e->hp            = e->maxHp = 5;
+        e->shootTimer    = 1.0f + i * 0.2f;
+        e->shootInterval = w->shootInterval;
+        e->moveTimer     = 0;
+        e->stayTimer     = 0;
+        e->stayDuration  = w->stayDuration;
+        e->leaving       = false;
+        e->active        = true;
+        e->color         = w->color;
+        e->enterDir      = w->enterDir;
+        e->exitDir       = w->exitDir;
+        e->moveType      = w->moveType;
     }
 }
 
 static void UpdateEnemies(float dt) {
-    bool anyActive = false;
+    while (nextWave < WAVE_COUNT && stgTimer >= WAVES[nextWave].spawnTime) {
+        SpawnWave(nextWave);
+        nextWave++;
+    }
 
     for (int i = 0; i < MAX_ENEMIES; i++) {
         if (!enemies[i].active) continue;
-        anyActive = true;
+        Enemy *e = &enemies[i];
 
-        float targetY = (i < 6) ? 100.0f : 170.0f;
+        // --- LEAVING: move toward exit ---
+        if (e->leaving) {
+            float exitSpd = 3.5f;
+            if      (e->exitDir == EXIT_BOTTOM) e->pos.y += exitSpd;
+            else if (e->exitDir == EXIT_TOP)    e->pos.y -= exitSpd;
+            else if (e->exitDir == EXIT_LEFT)   e->pos.x -= exitSpd;
+            else if (e->exitDir == EXIT_RIGHT)  e->pos.x += exitSpd;
 
-        float baseX = (i < 6)
-                ? PLAY_X + 40.0f + i * 65.0f
-                : PLAY_X + 65.0f + (i - 6) * 60.0f;
-                
-        if (enemies[i].pos.y < targetY) {
-            enemies[i].pos.y += 2.5f;
-            enemies[i].pos.x  = baseX;
-            enemies[i].moveTimer = 0;
+            // Deactivate once fully off screen
+            if (e->pos.x < PLAY_X - 60  || e->pos.x > PLAY_X + PLAY_W + 60 ||
+                e->pos.y < -60           || e->pos.y > SCREEN_H + 60) {
+                e->active = false;
+            }
+            continue;
+        }
+
+        // --- ENTERING: slide toward base position ---
+        bool arrived = false;
+        if (e->enterDir == ENTER_TOP) {
+            if (e->pos.y < e->baseY) e->pos.y += 2.5f;
+            else arrived = true;
+        } else if (e->enterDir == ENTER_LEFT) {
+            if (e->pos.x < e->baseX) e->pos.x += 3.0f;
+            else arrived = true;
+        } else {  // ENTER_RIGHT
+            if (e->pos.x > e->baseX) e->pos.x -= 3.0f;
+            else arrived = true;
+        }
+
+        if (!arrived) {
+            e->moveTimer = 0;
+            e->stayTimer = 0;
         } else {
-            enemies[i].moveTimer += dt;
-            enemies[i].pos.x = baseX + sinf(enemies[i].moveTimer * 1.5f) * 10.0f;
+            // --- ARRIVED: apply movement pattern ---
+            e->moveTimer += dt;
+            e->stayTimer += dt;
 
-            enemies[i].pos.x = Clampf(enemies[i].pos.x,
-                PLAY_X + enemies[i].radius,
-                PLAY_X + PLAY_W - enemies[i].radius);
-        }
+            if (e->moveType == MOVE_HOVER) {
+                e->pos.x = e->baseX + sinf(e->moveTimer * 1.5f) * 18.0f;
+                e->pos.x = Clampf(e->pos.x, PLAY_X + e->radius, PLAY_X + PLAY_W - e->radius);
 
-        enemies[i].shootTimer -= dt;
-        if (enemies[i].shootTimer <= 0) {
-            enemies[i].shootTimer = enemies[i].shootInterval;
-            FireAimed(enemies[i].pos, 3.5f, ENEMY_BULLET_R - 1, enemies[i].color);
-        }
+            } else if (e->moveType == MOVE_SWEEP) {
+                // Sweep smoothly across the screen
+                float sweepDir = (e->enterDir == ENTER_LEFT) ? 1.0f : -1.0f;
+                e->pos.x += sweepDir * 1.8f;
 
-        if (enemies[i].pos.y > SCREEN_H + 30) {
-            enemies[i].active = false;
-        }
-    }
+            } else if (e->moveType == MOVE_ZIGZAG) {
+                // Zigzag slowly downward
+                e->pos.x = e->baseX + sinf(e->moveTimer * 3.0f) * 40.0f;
+                e->pos.y += 0.4f;
+                e->pos.x = Clampf(e->pos.x, PLAY_X + e->radius, PLAY_X + PLAY_W - e->radius);
+            }
 
-    if (!anyActive && phase == PHASE_ENEMIES) {
-        phase = PHASE_BOSS;
-        for (int i = 0; i < MAX_ENEMY_BULLETS; i++) {
-            enemyBullets[i].active = false;
+            // --- SHOOT ---
+            e->shootTimer -= dt;
+            if (e->shootTimer <= 0) {
+                e->shootTimer = e->shootInterval;
+                FireAimed(e->pos, 3.5f, ENEMY_BULLET_R - 1, e->color);
+            }
+
+            // --- LEAVE when stayTimer expires or sweeper exits bounds ---
+            bool sweepDone = (e->moveType == MOVE_SWEEP) &&
+                             (e->pos.x < PLAY_X - 20 || e->pos.x > PLAY_X + PLAY_W + 20);
+            if (e->stayTimer >= e->stayDuration || sweepDone) {
+                e->leaving = true;
+            }
         }
     }
 }
@@ -419,6 +540,7 @@ static void GameInit(void) {
     InitPlayer();
     InitEnemies();
     // Reset state global lainnya
+    nextWave  = 0;
     score     = 0;
     phase     = PHASE_ENEMIES;
     paused    = false;
@@ -441,7 +563,7 @@ int main(void) {
     PlayMusicStream(musicEnemy);
 
     float musicSwitchTimer = 0.0f;
-    float musicSwitchInterval = 120.0f; // Switch tracks every 120 seconds
+    float musicSwitchInterval = 159.0f; // Switch tracks every 120 seconds
     bool musicSwitched = false;
 
     SetTargetFPS(60);
@@ -469,6 +591,10 @@ int main(void) {
                     currentTrack = musicBoss;
                     PlayMusicStream(currentTrack);
                     musicSwitched = true;
+
+                    for (int i = 0; i < MAX_ENEMIES; i++) enemies[i].active = false;
+                    for (int i = 0; i < MAX_ENEMY_BULLETS; i++) enemyBullets[i].active = false;
+                    phase = PHASE_BOSS;
                 }
             }
             handleCollisions();
