@@ -9,7 +9,7 @@
 // Constants
 
 #define PLAY_W 400
-#define HUD_SIDE_W 100
+#define HUD_SIDE_W 150
 #define PLAY_X HUD_SIDE_W
 #define SCREEN_W (PLAY_X + PLAY_W + HUD_SIDE_W)
 #define SCREEN_H 640
@@ -35,12 +35,15 @@
 #define WAVE_COUNT (sizeof(WAVES) / sizeof(WAVES[0]))
 #define DEV_CODE "Tohok"
 #define DEV_INPUT_MAX 15
+#define HELL_CODE "Mikobrainrot"
+#define HELL_INPUT_MAX 22
 
 typedef enum {
     PHASE_MENU,
     PHASE_WIN,
     PHASE_ENEMIES,
     PHASE_BOSS,
+    PHASE_BOSS_DEATH,
     PHASE_DEAD
 } GamePhase;
 
@@ -138,6 +141,7 @@ typedef struct {
     bool transforming;
     float transformTimer;
     float stunTimer;
+    float deathTimer;
     char name[24];
 } Boss;
 
@@ -183,11 +187,14 @@ static float        stgTimer;    // Hitung sudah berapa lama karakter hidup untu
 static bool         paused;
 static int          nextWave = 0;
 static bool         playerFocus = false;
-static char         devInput[DEV_INPUT_MAX + 1] = {0};
-static int          devLen = 0;
+static char         codeInput[HELL_INPUT_MAX + 1] = {0};
+static int          codeLen = 0;
 static bool         devMode = false;
 static float        devMsgTimer = 0.0f;
 static int          devFeedback = 0; /* 0=none 1=on 2=off 3=wrong */
+static bool         hellMode = false;
+static float        hellMsgTimer = 0.0f;
+static int          hellFeedback = 0; /* 0=none 1=on 2=off 3=wrong */
 
 static void BossEnterRage(void);
 static void BossUpdatePhase(void);
@@ -423,9 +430,9 @@ static void BossOnHpDepleted(void) {
         BossEnterRage();
     } else {
         SpawnBossDefeatBurst(boss.pos);
-        boss.active = false;
+        boss.deathTimer = 2.5f;
+        phase = PHASE_BOSS_DEATH;
         score += 50000;
-        phase = PHASE_WIN;
     }
 }
 
@@ -587,6 +594,7 @@ static void SpawnWave(int waveIndex) {
         e->hp            = e->maxHp = 5;
         e->shootTimer    = 1.0f + i * 0.2f;
         e->shootInterval = w->shootInterval * 0.82f;
+        if (hellMode) e->shootInterval *= 0.6f;
         e->moveTimer     = 0;
         e->stayTimer     = 0;
         e->stayDuration  = w->stayDuration;
@@ -745,6 +753,9 @@ static void BossEnterRage(void) {
     boss.transforming = true;
     boss.transformTimer = BOSS_TRANSFORM_TIME;
     boss.maxHp = BOSS_RAGE_HP;
+    if (hellMode) {
+        boss.maxHp = (int)(BOSS_RAGE_HP * 1.8f);
+    }
     boss.hp = boss.maxHp;
     boss.phase = 0;
     boss.patternStep = 0;
@@ -774,6 +785,7 @@ static void BossUpdatePhase(void) {
 static float BossBulletSpeed(void) {
     float spd = 2.8f + boss.phase * 0.45f;
     if (boss.rage) spd += 0.65f + boss.phase * 0.2f;
+    if (hellMode) spd *= 1.35f;
     return spd;
 }
 
@@ -1093,6 +1105,9 @@ static void InitBoss(void) {
     boss.pos = (Vector2){ PLAY_X + PLAY_W / 2.0f, -90.0f };
     boss.radius = 38.0f;
     boss.hp = boss.maxHp = BOSS_MAX_HP;
+    if (hellMode) {
+        boss.hp = boss.maxHp = (int)(BOSS_MAX_HP * 1.8f);
+    }
     boss.attackTimer = 0.4f;
     boss.burstTimer = 0.0f;
     boss.phaseTimer = 0.0f;
@@ -1105,6 +1120,7 @@ static void InitBoss(void) {
     boss.transforming = false;
     boss.transformTimer = 0.0f;
     boss.stunTimer = 0.0f;
+    boss.deathTimer = 0.0f;
     boss.active = true;
     boss.entered = false;
     boss.phase = 0;
@@ -1152,6 +1168,7 @@ static void UpdateBoss(float dt) {
     boss.attackTimer -= dt;
     float interval = 1.05f - boss.phase * 0.12f;
     if (boss.rage) interval = 0.82f - boss.phase * 0.1f;
+    if (hellMode) interval *= 0.65f;
     if (boss.attackTimer <= 0.0f) {
         boss.attackTimer = interval;
         if (boss.rage) BossRunRagePhasePattern();
@@ -1161,10 +1178,12 @@ static void UpdateBoss(float dt) {
     boss.phaseTimer += dt;
     float aimInterval = 1.35f - boss.phase * 0.15f;
     if (boss.rage) aimInterval = 1.0f - boss.phase * 0.12f;
+    if (hellMode) aimInterval *= 0.65f;
     if (boss.phaseTimer >= aimInterval) {
         boss.phaseTimer = 0.0f;
         int shots = 1 + boss.phase / 2;
         if (boss.rage) shots = 2 + boss.phase / 2;
+        if (hellMode) shots = (int)(shots * 1.4f);
         for (int i = 0; i < shots; i++) {
             FireAimed(boss.pos, BossBulletSpeed() * 0.95f, BossBulletRadius(), BossBulletMain());
         }
@@ -1330,6 +1349,10 @@ static void DrawHUD(void) {
     if (devMode) {
         DrawText("[DEV MODE]", 8, SCREEN_H - 24, 14, (Color){100, 255, 150, 200});
     }
+
+    if (hellMode) {
+        DrawText("[HELL MODE]", 8, SCREEN_H - 40, 14, (Color){255, 50, 50, 200});
+    }
 }
 
 static void DrawEndScreen(const char *msg, Color color) {
@@ -1393,40 +1416,54 @@ static void GameInit(void) {
 }
 
 static bool UpdateMenuInput(float dt) {
-    if (devMsgTimer > 0.0f) devMsgTimer -= dt;
+    if (devMsgTimer > 0.0f) {
+        devMsgTimer -= dt;
+        if (devMsgTimer <= 0.0f) devFeedback = 0;
+    }
+    if (hellMsgTimer > 0.0f) {
+        hellMsgTimer -= dt;
+        if (hellMsgTimer <= 0.0f) hellFeedback = 0;
+    }
 
     int ch = GetCharPressed();
     while (ch > 0) {
-        if (ch >= 32 && ch <= 126 && devLen < DEV_INPUT_MAX) {
-            devInput[devLen++] = (char)ch;
-            devInput[devLen] = '\0';
+        if (ch >= 32 && ch <= 126 && codeLen < HELL_INPUT_MAX) {
+            codeInput[codeLen++] = (char)ch;
+            codeInput[codeLen] = '\0';
         }
         ch = GetCharPressed();
     }
 
-    if (IsKeyPressed(KEY_BACKSPACE) && devLen > 0) {
-        devLen--;
-        devInput[devLen] = '\0';
+    if (IsKeyPressed(KEY_BACKSPACE) && codeLen > 0) {
+        codeLen--;
+        codeInput[codeLen] = '\0';
     }
 
-    if (IsKeyPressed(KEY_ENTER) && devLen > 0) {
-        if (strcmp(devInput, DEV_CODE) == 0) {
+    if (IsKeyPressed(KEY_ENTER) && codeLen > 0) {
+        bool devMatch = strcmp(codeInput, DEV_CODE) == 0;
+        bool hellMatch = strcmp(codeInput, HELL_CODE) == 0;
+
+        if (devMatch) {
             devMode = !devMode;
             devFeedback = devMode ? 1 : 2;
             devMsgTimer = 2.5f;
+        } else if (hellMatch) {
+            hellMode = !hellMode;
+            hellFeedback = hellMode ? 1 : 2;
+            hellMsgTimer = 2.5f;
         } else {
             devFeedback = 3;
             devMsgTimer = 1.5f;
         }
 
-        devLen = 0;
-        devInput[0] = '\0';
+        codeLen = 0;
+        codeInput[0] = '\0';
         return true;
     }
 
-    if (IsKeyPressed(KEY_ESCAPE) && devLen > 0) {
-        devLen = 0;
-        devInput[0] = '\0';
+    if (IsKeyPressed(KEY_ESCAPE) && codeLen > 0) {
+        codeLen = 0;
+        codeInput[0] = '\0';
     }
 
     return false;
@@ -1435,7 +1472,7 @@ static bool UpdateMenuInput(float dt) {
 static void UpdateMenu(void) {
     bool enterForCode = UpdateMenuInput(GetFrameTime());
 
-    if (!enterForCode && devLen == 0 &&
+    if (!enterForCode && codeLen == 0 &&
         (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_SPACE) || IsKeyPressed(KEY_Z))) {
         GameInit();
     }
@@ -1498,9 +1535,9 @@ static void DrawMenu(void) {
     int textY = barY + (barH - fontSize) / 2;
     int cursorX = textX;
 
-    if (devLen > 0) {
-        DrawText(devInput, textX, textY, fontSize, WHITE);
-        cursorX = textX + MeasureText(devInput, fontSize);
+    if (codeLen > 0) {
+        DrawText(codeInput, textX, textY, fontSize, WHITE);
+        cursorX = textX + MeasureText(codeInput, fontSize);
     } else {
         DrawText("enter code...", textX, textY, fontSize, (Color){90, 80, 110, 255});
     }
@@ -1524,11 +1561,29 @@ static void DrawMenu(void) {
             msgColor = (Color){255, 100, 100, 255};
         }
         int msgW = MeasureText(msg, 16);
-        DrawText(msg, (SCREEN_W - msgW) / 2, barY - 26, 16, msgColor);
+        DrawText(msg, (SCREEN_W - msgW) / 2, barY - 50, 16, msgColor);
+    }
+
+    if (hellMsgTimer > 0.0f && hellFeedback > 0) {
+        const char *msg = "";
+        Color msgColor = WHITE;
+        if (hellFeedback == 1) {
+            msg = "HELL MODE ON";
+            msgColor = (Color){255, 80, 80, 255};
+        } else if (hellFeedback == 2) {
+            msg = "HELL MODE OFF";
+            msgColor = (Color){200, 180, 180, 255};
+        }
+        int msgW = MeasureText(msg, 16);
+        DrawText(msg, (SCREEN_W - msgW) / 2, barY - 50, 16, msgColor);
     }
 
     if (devMode) {
         DrawText("[DEV]", barX + barW + 6, barY + 7, 14, (Color){100, 255, 150, 255});
+    }
+
+    if (hellMode) {
+        DrawText("[HELL]", barX + barW + 6, barY - 5, 14, (Color){255, 80, 80, 255});
     }
 }
 
@@ -1599,6 +1654,11 @@ int main(void) {
                     UpdateBoss(dt);
                 } else if (phase == PHASE_ENEMIES) {
                     UpdateEnemies(dt);
+                } else if (phase == PHASE_BOSS_DEATH) {
+                    boss.deathTimer -= dt;
+                    if (boss.deathTimer <= 0.0f) {
+                        phase = PHASE_WIN;
+                    }
                 }
 
                 if (phase == PHASE_ENEMIES || phase == PHASE_BOSS) {
@@ -1608,6 +1668,10 @@ int main(void) {
                     UpdateEnemyBullets(dt);
                     UpdateParticles(dt);
                     stgTimer += dt;
+                }
+
+                if (phase == PHASE_BOSS_DEATH) {
+                    UpdateParticles(dt);
                 }
             }
 
@@ -1628,6 +1692,11 @@ int main(void) {
             if (phase == PHASE_ENEMIES) DrawEnemies();
             DrawEnemyBullets();
             if (phase == PHASE_BOSS) DrawBoss();
+            if (phase == PHASE_BOSS_DEATH) {
+                float fadeAlpha = (boss.deathTimer / 2.5f) * 255.0f;
+                DrawBoss();
+                DrawRectangle(PLAY_X, 0, PLAY_W, SCREEN_H, (Color){0, 0, 0, 255 - (int)fadeAlpha});
+            }
             DrawParticles();
             DrawBombEffect();
             DrawPlayer();
