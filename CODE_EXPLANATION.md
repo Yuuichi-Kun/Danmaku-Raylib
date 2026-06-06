@@ -163,6 +163,7 @@ typedef struct {
     float transformTimer;  // Transformation progress
     float stunTimer;       // Stun from bomb
     float deathTimer;      // Death animation timer
+    float animTimer;       // Running sprite animation timer (seconds elapsed)
     char name[24];         // Boss name ("Letty Whiterock" or "Letty - Blood Lunatic")
 } Boss;
 ```
@@ -170,9 +171,31 @@ typedef struct {
 **Purpose:** Represents the boss enemy
 - Complex AI with multiple phases and attack patterns
 - Transitions to "rage" mode at 50% HP
-- Deathimer creates death animation sequence
+- `deathTimer` drives the death fade-out animation sequence
+- `animTimer` is incremented every frame and drives idle sprite frame selection
 
-### 5. Particle Structure
+### 5. Global Boss Textures
+```c
+static Texture2D texBossMain;        // Idle / rage sprite sheet (6 frames, 128×128 each)
+static Texture2D texBossTransition;  // Phase-2 transformation sheet (4 frames)
+static Texture2D texBossDeath;       // Death animation sheet (8 frames)
+```
+
+**Purpose:** Sprite sheets used by `DrawBoss()` for frame-based animation
+- Loaded once at startup from the `assets/` directory
+- Freed with `UnloadTexture()` before `CloseWindow()`
+- All sheets are horizontal strips: frame N starts at pixel `N * 128`
+
+**Asset files:**
+| Variable | File | Frames |
+|---|---|---|
+| `texBossMain` | `assets/BossSprite.png` | 6 |
+| `texBossTransition` | `assets/Boss2ndPhaseTransition.png` | 4 |
+| `texBossDeath` | `assets/BossDeath.png` | 8 |
+
+---
+
+### 6. Particle Structure
 ```c
 typedef struct {
     Vector2 pos;           // Position
@@ -190,7 +213,7 @@ typedef struct {
 - Fade out as life decrements
 - Used for 3D-like effects and impact feedback
 
-### 6. EnemyWave Structure
+### 7. EnemyWave Structure
 ```c
 typedef struct {
     float spawnTime;       // When to spawn this wave (in game seconds)
@@ -214,7 +237,7 @@ typedef struct {
 - Waves spawn at specific times (stgTimer)
 - Controls difficulty progression
 
-### 7. GamePhase Enum
+### 8. GamePhase Enum
 ```c
 typedef enum {
     PHASE_MENU,        // Main menu
@@ -752,8 +775,35 @@ static void BossOnHpDepleted(void) {
 1. Boss must be in rage mode to die
 2. When HP ≤ 0 in rage: spawn particles
 3. Enter PHASE_BOSS_DEATH for 2.5s
-4. During phase: boss displayed with darkening overlay
+4. During phase: `DrawBoss()` plays `texBossDeath` frames and fades alpha with `deathTimer`
 5. After timer: transition to PHASE_WIN
+
+### Boss Sprite Drawing (DrawBoss)
+The boss is drawn using `DrawTexturePro()` with a 128×128 destination rectangle centered on `boss.pos`.
+Three different states select a different texture and frame:
+
+```c
+Rectangle sourceRec = { (float)(frameIndex * 128), 0.0f, 128.0f, 128.0f };
+Rectangle destRec   = { boss.pos.x, boss.pos.y, 128.0f, 128.0f };
+Vector2 origin      = { 64.0f, 64.0f };  // Center pivot
+DrawTexturePro(currentTex, sourceRec, destRec, origin, 0.0f, tint);
+```
+
+| State | Texture | Frames | Frame Formula | Tint |
+|---|---|---|---|---|
+| `PHASE_BOSS_DEATH` | `texBossDeath` | 8 | `((2.5f - deathTimer) / 2.5f) * 8` | Fades α with `deathTimer` |
+| `boss.transforming` | `texBossTransition` | 4 | `(BOSS_TRANSFORM_TIME - transformTimer) * 10 % 4` | Pulses red↔white at 8 Hz |
+| Normal / Rage | `texBossMain` | 6 | `(animTimer * 8) % 6` | Stunned=grey, Rage=slight red, else WHITE |
+
+**`animTimer` usage:**
+```c
+// Updated every frame (even while transforming/entering)
+boss.animTimer += dt;
+
+// Frame selection in idle/rage state
+frameIndex = (int)(boss.animTimer * 8.0f) % 6;  // 8 fps, 6 frames
+```
+This creates a looping 6-frame idle animation at approximately 8 frames per second, independent of boss state.
 
 ---
 
@@ -1054,14 +1104,21 @@ void UseBomb(void) {
 InitWindow(SCREEN_W, SCREEN_H, "Danmaku Game");
 InitAudioDevice();
 
+// Load boss sprite sheets (must happen after InitWindow)
+texBossMain       = LoadTexture("assets/BossSprite.png");
+texBossTransition = LoadTexture("assets/Boss2ndPhaseTransition.png");
+texBossDeath      = LoadTexture("assets/BossDeath.png");
+
 // Load music
-Music musicEnemy = LoadMusicStream("assets/...");
-Music musicBoss = LoadMusicStream("assets/...");
+Music musicEnemy = LoadMusicStream("assets/Touhou 7 - Paradise  Deep Mountain (Stage 1).mp3");
+Music musicBoss  = LoadMusicStream("assets/Touhou 7 - Letty Whiterock's Theme - Crystallized Silver (Boss 1).mp3");
 
 SetTargetFPS(60);  // 60 FPS lock
 
 phase = PHASE_MENU;
 ```
+
+**Texture loading must occur after `InitWindow()`** — Raylib requires an active OpenGL context to upload textures to the GPU.
 
 ### Main Game Loop
 ```c
@@ -1161,7 +1218,18 @@ while (!WindowShouldClose()) {
     
     EndDrawing();
 }
+
+// Cleanup (after main loop)
+UnloadTexture(texBossMain);
+UnloadTexture(texBossTransition);
+UnloadTexture(texBossDeath);
+UnloadMusicStream(musicEnemy);
+UnloadMusicStream(musicBoss);
+CloseAudioDevice();
+CloseWindow();
 ```
+
+**Cleanup order:** Textures and audio streams are unloaded before `CloseWindow()` to avoid GPU/audio resource leaks.
 
 ### Update Order
 ```

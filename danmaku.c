@@ -142,6 +142,7 @@ typedef struct {
     float transformTimer;
     float stunTimer;
     float deathTimer;
+    float animTimer;
     char name[24];
 } Boss;
 
@@ -180,6 +181,9 @@ static Bullet       playerBullets[MAX_BULLETS];
 static EnemyBullet  enemyBullets[MAX_ENEMY_BULLETS];
 static Enemy        enemies[MAX_ENEMIES];
 static Boss         boss;
+static Texture2D    texBossMain;
+static Texture2D    texBossTransition;
+static Texture2D    texBossDeath;
 static Particle     particles[MAX_PARTICLES];
 static GamePhase    phase;
 static int          score;
@@ -1124,12 +1128,15 @@ static void InitBoss(void) {
     boss.active = true;
     boss.entered = false;
     boss.phase = 0;
+    boss.animTimer = 0.0f;
     strncpy(boss.name, "Letty Whiterock", sizeof(boss.name) - 1);
     boss.name[sizeof(boss.name) - 1] = '\0';
 }
 
 static void UpdateBoss(float dt) {
     if (!boss.active) return;
+
+    boss.animTimer += dt;
 
     if (!boss.entered) {
         boss.pos.y += 95.0f * dt;
@@ -1218,8 +1225,51 @@ static void DrawBoss(void) {
     }
 
     DrawCircleV(boss.pos, boss.radius + 6.0f, glow);
-    DrawCircleV(boss.pos, boss.radius, body);
-    DrawCircleV(boss.pos, boss.radius - 10.0f, core);
+
+    // Determine which texture and frame to use
+    Texture2D currentTex = texBossMain;
+    int frameIndex = 0;
+    Color tint = WHITE;
+
+    if (phase == PHASE_BOSS_DEATH) {
+        currentTex = texBossDeath;
+        frameIndex = (int)(((2.5f - boss.deathTimer) / 2.5f) * 8.0f);
+        if (frameIndex > 7) frameIndex = 7;
+        if (frameIndex < 0) frameIndex = 0;
+        
+        // Fade out the death sprite in sync with the deathTimer
+        float fadeAlpha = (boss.deathTimer / 2.5f) * 255.0f;
+        if (fadeAlpha > 255.0f) fadeAlpha = 255.0f;
+        if (fadeAlpha < 0.0f) fadeAlpha = 0.0f;
+        tint = (Color){ 255, 255, 255, (unsigned char)fadeAlpha };
+    } else if (boss.transforming) {
+        currentTex = texBossTransition;
+        frameIndex = (int)((BOSS_TRANSFORM_TIME - boss.transformTimer) * 10.0f) % 4;
+        
+        // Pulse red/white tint during transition
+        if (((int)(boss.transformTimer * 8.0f) % 2 == 0)) {
+            tint = (Color){ 255, 180, 180, 255 };
+        } else {
+            tint = WHITE;
+        }
+    } else {
+        currentTex = texBossMain;
+        frameIndex = (int)(boss.animTimer * 8.0f) % 6;
+        
+        if (boss.stunTimer > 0.0f) {
+            tint = (Color){ 150, 150, 170, 255 };
+        } else if (boss.rage) {
+            // Give a slight angry red tint in rage mode
+            tint = (Color){ 255, 200, 200, 255 };
+        } else {
+            tint = WHITE;
+        }
+    }
+
+    Rectangle sourceRec = { (float)(frameIndex * 128), 0.0f, 128.0f, 128.0f };
+    Rectangle destRec = { boss.pos.x, boss.pos.y, 128.0f, 128.0f };
+    Vector2 origin = { 64.0f, 64.0f };
+    DrawTexturePro(currentTex, sourceRec, destRec, origin, 0.0f, tint);
 
     float hpRatio = (float)boss.hp / (float)boss.maxHp;
     int barW = PLAY_W - 40;
@@ -1255,6 +1305,7 @@ static void DamagePlayer(void) {
     }
 }
 
+// Hitcheck musuh dan boss ke player
 static void HandlePlayerHits(void) {
     if (player.dead || player.invincTimer > 0.0f) return;
 
@@ -1281,6 +1332,7 @@ static void handleCollisions(void) {
     for (int b = 0; b < MAX_BULLETS; b++) {
         if (!playerBullets[b].active) continue;
 
+        // Check against boss
         if (phase == PHASE_BOSS && boss.active && !boss.transforming) {
             if (Dist(playerBullets[b].pos, boss.pos) < BULLET_RADIUS + boss.radius) {
                 Vector2 hitPos = playerBullets[b].pos;
@@ -1296,6 +1348,7 @@ static void handleCollisions(void) {
             }
         }
 
+        // Check against regular enemies
         for (int e = 0; e < MAX_ENEMIES; e++) {
             if (!enemies[e].active) continue;
             if (Dist(playerBullets[b].pos, enemies[e].pos) < BULLET_RADIUS + enemies[e].radius) {
@@ -1591,6 +1644,11 @@ static void DrawMenu(void) {
 int main(void) {
     InitWindow(SCREEN_W, SCREEN_H, "Danmaku Game");
     InitAudioDevice();
+
+    // Load boss textures
+    texBossMain = LoadTexture("assets/BossSprite.png");
+    texBossTransition = LoadTexture("assets/Boss2ndPhaseTransition.png");
+    texBossDeath = LoadTexture("assets/BossDeath.png");
     
     Music musicEnemy = LoadMusicStream("assets/Touhou 7 - Paradise  Deep Mountain (Stage 1).mp3");
     Music musicBoss = LoadMusicStream("assets/Touhou 7 - Letty Whiterock's Theme - Crystallized Silver (Boss 1).mp3");
@@ -1718,6 +1776,10 @@ int main(void) {
         EndDrawing();
     }
     
+    UnloadTexture(texBossMain);
+    UnloadTexture(texBossTransition);
+    UnloadTexture(texBossDeath);
+
     UnloadMusicStream(musicEnemy);
     UnloadMusicStream(musicBoss);
     CloseAudioDevice();
