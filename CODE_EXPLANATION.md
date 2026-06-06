@@ -125,12 +125,13 @@ typedef struct {
     float stayDuration;    // Duration to stay (from wave data)
     bool leaving;          // Currently exiting screen?
     bool active;           // Is enemy active?
-    Color color;           // Enemy color
+    Color color;           // Enemy bullet/wave color
     EnemyEnter enterDir;   // Entry direction (TOP/LEFT/RIGHT)
     EnemyExit exitDir;     // Exit direction (BOTTOM/LEFT/RIGHT/TOP)
     EnemyMove moveType;    // Movement pattern (HOVER/SWEEP/ZIGZAG)
     float baseX, baseY;    // Target position when hovering
     float stunTimer;       // Stun duration from bomb
+    float animTimer;       // Running sprite animation timer (seconds elapsed)
 } Enemy;
 ```
 
@@ -138,6 +139,7 @@ typedef struct {
 - Enters screen, hovers/moves using patterns
 - Shoots at player based on intervals
 - Can be stunned by bombs
+- `animTimer` increments every frame and drives sprite frame selection
 - Exits when stayDuration expires
 
 ### 4. Boss Structure
@@ -174,7 +176,17 @@ typedef struct {
 - `deathTimer` drives the death fade-out animation sequence
 - `animTimer` is incremented every frame and drives idle sprite frame selection
 
-### 5. Global Boss Textures
+### 5. Global Enemy Texture
+```c
+static Texture2D texEnemy;  // Enemy sprite sheet (6 frames, 32×36 each)
+```
+
+**Purpose:** Sprite sheet used by `DrawEnemies()` for frame-based animation
+- Loaded once at startup from `assets/EnemySprite.png`
+- 192×36 px total; each frame is 32px wide × 36px tall
+- Freed with `UnloadTexture()` before `CloseWindow()`
+
+### 6. Global Boss Textures
 ```c
 static Texture2D texBossMain;        // Idle / rage sprite sheet (6 frames, 128×128 each)
 static Texture2D texBossTransition;  // Phase-2 transformation sheet (4 frames)
@@ -187,11 +199,12 @@ static Texture2D texBossDeath;       // Death animation sheet (8 frames)
 - All sheets are horizontal strips: frame N starts at pixel `N * 128`
 
 **Asset files:**
-| Variable | File | Frames |
-|---|---|---|
-| `texBossMain` | `assets/BossSprite.png` | 6 |
-| `texBossTransition` | `assets/Boss2ndPhaseTransition.png` | 4 |
-| `texBossDeath` | `assets/BossDeath.png` | 8 |
+| Variable | File | Frames | Frame Size |
+|---|---|---|---|
+| `texEnemy` | `assets/EnemySprite.png` | 6 | 32×36 px |
+| `texBossMain` | `assets/BossSprite.png` | 6 | 128×128 px |
+| `texBossTransition` | `assets/Boss2ndPhaseTransition.png` | 4 | 128×128 px |
+| `texBossDeath` | `assets/BossDeath.png` | 8 | 128×128 px |
 
 ---
 
@@ -564,15 +577,38 @@ if (e->leaving) {
 - **Hit by player bullet:** -1 HP
 - **Hit by bomb:** Stun for 0.15 seconds (can't shoot or move)
 
-### Enemy Rendering
-```c
-DrawCircleV(e->pos, e->radius, body);  // Outer circle with color
-DrawCircleV(e->pos, e->radius - 4.0f, (Color){255, 255, 255, 200});  // Inner white
+### Enemy Rendering (DrawEnemies)
+Enemies are drawn using `DrawTexturePro()` with a centered origin, matching the same pattern as `DrawBoss()`:
 
-// Health bar above enemy
-float hpRatio = (float)e->hp / e->maxHp;
-DrawRectangle(..., 36 * hpRatio, 4, GREEN);  // Green bar
+```c
+int frameIndex = (int)(enemies[i].animTimer * 8.0f) % ENEMY_FRAME_COUNT; // 8 fps, 6 frames
+
+Color tint = WHITE;
+if (enemies[i].stunTimer > 0.0f) {
+    tint = (Color){ 150, 150, 170, 255 };  // Grey tint when stunned
+}
+
+Rectangle src = {
+    (float)(frameIndex * ENEMY_FRAME_W),   // Frame X offset (32px per frame)
+    0.0f,
+    (float)ENEMY_FRAME_W,                  // 32 px
+    (float)ENEMY_FRAME_H                   // 36 px
+};
+Rectangle dst = {
+    enemies[i].pos.x,
+    enemies[i].pos.y,
+    (float)ENEMY_FRAME_W,
+    (float)ENEMY_FRAME_H
+};
+Vector2 origin = { ENEMY_FRAME_W / 2.0f, ENEMY_FRAME_H / 2.0f };  // Center pivot
+DrawTexturePro(texEnemy, src, dst, origin, 0.0f, tint);
 ```
+
+**Key rendering details:**
+- `animTimer` is incremented every frame in `UpdateEnemies()`, independent of movement state
+- The `origin` vector centers the sprite on `enemies[i].pos` (same technique as boss)
+- Tint is `WHITE` normally; switches to grey `(150, 150, 170)` during bomb stun
+- The enemy `color` field is used for bullet colors, **not** for sprite tinting
 
 ---
 
@@ -1104,7 +1140,13 @@ void UseBomb(void) {
 InitWindow(SCREEN_W, SCREEN_H, "Danmaku Game");
 InitAudioDevice();
 
-// Load boss sprite sheets (must happen after InitWindow)
+// Load player sprite sheet
+playerSprite = LoadTexture("assets/SakuyaIzayoi.png");
+
+// Load enemy sprite sheet
+texEnemy = LoadTexture("assets/EnemySprite.png");
+
+// Load boss sprite sheets
 texBossMain       = LoadTexture("assets/BossSprite.png");
 texBossTransition = LoadTexture("assets/Boss2ndPhaseTransition.png");
 texBossDeath      = LoadTexture("assets/BossDeath.png");
@@ -1223,6 +1265,8 @@ while (!WindowShouldClose()) {
 UnloadTexture(texBossMain);
 UnloadTexture(texBossTransition);
 UnloadTexture(texBossDeath);
+UnloadTexture(texEnemy);
+UnloadTexture(playerSprite);
 UnloadMusicStream(musicEnemy);
 UnloadMusicStream(musicBoss);
 CloseAudioDevice();
@@ -1369,6 +1413,12 @@ score += 50000;   // When boss is defeated
 | SCREEN_H | 640 | Screen height |
 | PLAYER_SPEED | 240 px/s | Normal movement speed |
 | PLAYER_FOCUS | 120 px/s | Focused movement speed |
+| PLAYER_FRAME_W | 32 px | Player sprite frame width |
+| PLAYER_FRAME_H | 48 px | Player sprite frame height |
+| PLAYER_ANIM_FPS | 8 | Player animation frames per second |
+| ENEMY_FRAME_W | 32 px | Enemy sprite frame width |
+| ENEMY_FRAME_H | 36 px | Enemy sprite frame height |
+| ENEMY_FRAME_COUNT | 6 | Enemy animation frame count |
 | BOSS_MAX_HP | 450 | Boss normal HP |
 | BOSS_RAGE_HP | 380 | Boss rage mode HP |
 | BOMB_DURATION | 2.5s | Bomb cooldown |

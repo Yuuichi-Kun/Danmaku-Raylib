@@ -27,6 +27,12 @@
 #define PLAYER_RADIUS 5.0f
 #define PLAYER_GFX_R 14.0f
 #define PLAYER_MAX_BOMBS 3
+#define PLAYER_FRAME_W  32   // lebar 1 frame (sesuaikan!)
+#define PLAYER_FRAME_H  48   // tinggi 1 frame (sesuaikan!)
+#define PLAYER_ANIM_FPS 8    // kecepatan animasi
+#define ENEMY_FRAME_W   32   // lebar 1 frame enemy
+#define ENEMY_FRAME_H   36   // tinggi 1 frame enemy
+#define ENEMY_FRAME_COUNT 6  // jumlah frame animasi enemy
 #define BOMB_DURATION 2.5f
 #define BOMB_RADIUS_MAX 300.0f
 #define BOMB_STUN_TIME 0.15f
@@ -119,6 +125,7 @@ typedef struct {
     float baseX;
     float baseY;
     float stunTimer;
+    float animTimer;
 } Enemy;
 
 typedef struct {
@@ -176,10 +183,16 @@ typedef struct {
 
 // Global State
 
+static Texture2D    playerSprite;
 static Player       player;
 static Bullet       playerBullets[MAX_BULLETS];
+static int          playerAnimFrame = 0;
+static float        playerAnimTimer = 0.0f;
+static int          playerAnimRow    = 0;
+static bool         playerFacingLeft = false;
 static EnemyBullet  enemyBullets[MAX_ENEMY_BULLETS];
 static Enemy        enemies[MAX_ENEMIES];
+static Texture2D    texEnemy;
 static Boss         boss;
 static Texture2D    texBossMain;
 static Texture2D    texBossTransition;
@@ -548,20 +561,52 @@ static void UpdatePlayer(float dt) {
     if (IsKeyPressed(KEY_X) && (phase == PHASE_ENEMIES || phase == PHASE_BOSS)) {
         UseBomb();
     }
+
+    // Deteksi arah gerak
+    bool movingLeft  = IsKeyDown(KEY_RIGHT)  || IsKeyDown(KEY_D);
+    bool movingRight = IsKeyDown(KEY_LEFT) || IsKeyDown(KEY_A);
+
+    if (movingLeft || movingRight)
+        playerAnimRow = 1;   // baris ke-2 (index 1) = animasi gerak
+    else
+        playerAnimRow = 0;   // baris ke-1 (index 0) = idle
+
+    playerFacingLeft = movingLeft;
+    
+    // Animasi frame
+    playerAnimTimer += dt;
+    if (playerAnimTimer >= 1.0f / PLAYER_ANIM_FPS) {
+        playerAnimTimer = 0.0f;
+        playerAnimFrame = (playerAnimFrame + 1) % 4; // 4 frame idle
+    }
 }
 
 static void DrawPlayer(void) {
     if (!player.dead) {
         bool blink = (int)(player.invincTimer / 0.1f) % 2 == 0;
         if (player.invincTimer <= 0 || blink) {
-            if (!playerFocus) {
-                DrawCircleV(player.pos, PLAYER_GFX_R, BLUE);
-            }
-            DrawCircleV(player.pos, player.radius, (Color){ 255, 255, 255, playerFocus ? 230 : 180 });
-            if (playerFocus) {
-                DrawCircleLines((int)player.pos.x, (int)player.pos.y, player.radius, RED);
-                DrawCircleLines((int)player.pos.x, (int)player.pos.y, player.radius + 2.0f, (Color){ 255, 120, 120, 180 });
-            }
+
+        Rectangle src = {
+            (float)(playerAnimFrame * PLAYER_FRAME_W),
+            (float)(playerAnimRow * PLAYER_FRAME_H),  // baris 0 atau 1
+            (float)PLAYER_FRAME_W,
+            (float)PLAYER_FRAME_H
+        };
+
+        // Flip horizontal jika gerak kiri
+        if (playerFacingLeft) {
+            src.x += PLAYER_FRAME_W;
+            src.width = -PLAYER_FRAME_W;  // nilai negatif = flip
+        }
+
+        Rectangle dst = {
+            player.pos.x - PLAYER_FRAME_W / 2.0f,
+            player.pos.y - PLAYER_FRAME_H / 2.0f,
+            (float)PLAYER_FRAME_W,
+            (float)PLAYER_FRAME_H
+        };
+
+        DrawTexturePro(playerSprite, src, dst, (Vector2){0,0}, 0.0f, WHITE);
         }
     }
 }
@@ -621,6 +666,8 @@ static void UpdateEnemies(float dt) {
     for (int i = 0; i < MAX_ENEMIES; i++) {
         if (!enemies[i].active) continue;
         Enemy *e = &enemies[i];
+
+        e->animTimer += dt;
 
         if (e->stunTimer > 0.0f) {
             e->stunTimer -= dt;
@@ -724,16 +771,28 @@ static void DrawEnemyBullets(void) {
 static void DrawEnemies(void) {
     for (int i = 0; i < MAX_ENEMIES; i++) {
         if (!enemies[i].active) continue;
-        Color body = enemies[i].color;
-        if (enemies[i].stunTimer > 0.0f) {
-            body = (Color){ 180, 180, 200, 255 };
-        }
-        DrawCircleV(enemies[i].pos, enemies[i].radius, body);
-        DrawCircleV(enemies[i].pos, enemies[i].radius - 4.0f, (Color){255, 255, 255, 200});
 
-        float hpRatio = (float)enemies[i].hp / enemies[i].maxHp;
-        DrawRectangle((int)enemies[i].pos.x - 18, (int)enemies[i].pos.y + 22, 36, 4, DARKGRAY);
-        DrawRectangle((int)enemies[i].pos.x - 18, (int)enemies[i].pos.y + 22, (int)(36 * hpRatio), 4, GREEN);
+        int frameIndex = (int)(enemies[i].animTimer * 8.0f) % ENEMY_FRAME_COUNT;
+
+        Color tint = WHITE;
+        if (enemies[i].stunTimer > 0.0f) {
+            tint = (Color){ 150, 150, 170, 255 };
+        }
+
+        Rectangle src = {
+            (float)(frameIndex * ENEMY_FRAME_W),
+            0.0f,
+            (float)ENEMY_FRAME_W,
+            (float)ENEMY_FRAME_H
+        };
+        Rectangle dst = {
+            enemies[i].pos.x,
+            enemies[i].pos.y,
+            (float)ENEMY_FRAME_W,
+            (float)ENEMY_FRAME_H
+        };
+        Vector2 origin = { ENEMY_FRAME_W / 2.0f, ENEMY_FRAME_H / 2.0f };
+        DrawTexturePro(texEnemy, src, dst, origin, 0.0f, tint);
     }
 }
 
@@ -1645,6 +1704,12 @@ int main(void) {
     InitWindow(SCREEN_W, SCREEN_H, "Danmaku Game");
     InitAudioDevice();
 
+    // Load player textures
+    playerSprite = LoadTexture("assets/SakuyaIzayoi.png");
+
+    // Load enemy texture
+    texEnemy = LoadTexture("assets/EnemySprite.png");
+
     // Load boss textures
     texBossMain = LoadTexture("assets/BossSprite.png");
     texBossTransition = LoadTexture("assets/Boss2ndPhaseTransition.png");
@@ -1779,6 +1844,8 @@ int main(void) {
     UnloadTexture(texBossMain);
     UnloadTexture(texBossTransition);
     UnloadTexture(texBossDeath);
+    UnloadTexture(texEnemy);
+    UnloadTexture(playerSprite);
 
     UnloadMusicStream(musicEnemy);
     UnloadMusicStream(musicBoss);
