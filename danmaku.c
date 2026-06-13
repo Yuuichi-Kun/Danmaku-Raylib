@@ -244,7 +244,7 @@ static const EnemyWave WAVES[] = {
     { 36.0f,  0,   6,  PLAY_X+40.0f,  60.0f,  -60.0f,   110.0f,  1.8f,  4.0f, {255,  80, 120, 255}, ENTER_TOP,   EXIT_LEFT,   MOVE_HOVER   }, // exit left
     { 42.0f,  6,   6,  PLAY_X+40.0f,  60.0f, -180.0f,   185.0f,  1.8f,  4.0f, {255, 220,  60, 255}, ENTER_TOP,   EXIT_RIGHT,  MOVE_HOVER   }, // exit right
     { 54.0f,  0,   4,  -60.0f,        0.0f,    60.0f,   148.0f,  1.5f,  5.0f, {60,  220, 180, 255}, ENTER_LEFT,  EXIT_BOTTOM, MOVE_ZIGZAG  }, // from left, zigzag
-    { 54.0f,  6,   4,  PLAY_X+PLAY_W+60.0f, 0.0f, 60.0f, 220.0f, 1.5f, 5.0f, {255, 120,  60, 255}, ENTER_RIGHT, EXIT_BOTTOM, MOVE_ZIGZAG  }, // from right, zigzag
+    { 54.0f,  6,   4,  PLAY_X+PLAY_W+60.0f, 0.0f, 60.0f, 220.0f, 1.5f,  5.0f, {255, 120,  60, 255}, ENTER_RIGHT, EXIT_BOTTOM, MOVE_ZIGZAG  }, // from right, zigzag
     { 70.0f,  0,   6,  PLAY_X+40.0f,  60.0f,  -60.0f,   110.0f,  1.5f,  5.0f, {255,  80, 120, 255}, ENTER_TOP,   EXIT_BOTTOM, MOVE_HOVER   },
     { 76.0f,  6,   6,  PLAY_X+40.0f,  60.0f, -180.0f,   185.0f,  1.5f,  5.0f, {255, 160,  60, 255}, ENTER_TOP,   EXIT_BOTTOM, MOVE_HOVER   },
     { 90.0f,  0,   5,  -60.0f,        0.0f,   110.0f,   110.0f,  1.3f,  6.0f, {100, 180, 255, 255}, ENTER_LEFT,  EXIT_RIGHT,  MOVE_SWEEP   },
@@ -623,17 +623,17 @@ static void SpawnWave(int waveIndex) {
         int slot = (w->startIndex + i) % MAX_ENEMIES;
         Enemy *e = &enemies[slot];
 
-        // Starting position depends on entry direction
+        // Posis awal dan base tergantung arah masuk
         if (w->enterDir == ENTER_TOP) {
             e->pos = (Vector2){ w->startX + i * w->spacingX, w->startY - i * 15.0f };
             e->baseX = w->startX + i * w->spacingX;
             e->baseY = w->targetY;
         } else if (w->enterDir == ENTER_LEFT) {
-            // Space enemies vertically when entering from side
+            // Jarak musuh secara vertikal
             e->pos = (Vector2){ w->startX, w->targetY + i * 28.0f };
             e->baseX = PLAY_X + 60.0f + i * 60.0f;  // target X positions spread out
             e->baseY = w->targetY + i * 28.0f;
-        } else {  // ENTER_RIGHT
+        } else {  // Masuk Kanan
             e->pos = (Vector2){ w->startX, w->targetY + i * 28.0f };
             e->baseX = PLAY_X + PLAY_W - 60.0f - i * 60.0f;
             e->baseY = w->targetY + i * 28.0f;
@@ -707,7 +707,6 @@ static void UpdateEnemies(float dt) {
             e->moveTimer = 0;
             e->stayTimer = 0;
         } else {
-            // --- ARRIVED: apply movement pattern ---
             e->moveTimer += dt;
             e->stayTimer += dt;
 
@@ -716,12 +715,12 @@ static void UpdateEnemies(float dt) {
                 e->pos.x = Clampf(e->pos.x, PLAY_X + e->radius, PLAY_X + PLAY_W - e->radius);
 
             } else if (e->moveType == MOVE_SWEEP) {
-                // Sweep smoothly across the screen
+                // Bergerak horizontal dengan kecepatan konstan, keluar dari sisi yang berlawanan
                 float sweepDir = (e->enterDir == ENTER_LEFT) ? 1.0f : -1.0f;
                 e->pos.x += sweepDir * 1.8f;
 
             } else if (e->moveType == MOVE_ZIGZAG) {
-                // Zigzag slowly downward
+                // Gerak zigzag: horizontal sinusoidal sambil perlahan turun
                 e->pos.x = e->baseX + sinf(e->moveTimer * 3.0f) * 40.0f;
                 e->pos.y += 0.4f;
                 e->pos.x = Clampf(e->pos.x, PLAY_X + e->radius, PLAY_X + PLAY_W - e->radius);
@@ -733,7 +732,6 @@ static void UpdateEnemies(float dt) {
                 EnemyShootPattern(e);
             }
 
-            // --- LEAVE when stayTimer expires or sweeper exits bounds ---
             bool sweepDone = (e->moveType == MOVE_SWEEP) &&
                              (e->pos.x < PLAY_X - 20 || e->pos.x > PLAY_X + PLAY_W + 20);
             if (e->stayTimer >= e->stayDuration || sweepDone) {
@@ -1221,6 +1219,7 @@ static void UpdateBoss(float dt) {
         return;
     }
 
+    // Pergerakan sinusoidal dengan kecepatan dan amplitudo yang meningkat seiring fase dan rage
     boss.moveAngle += dt * (1.0f + boss.phase * 0.2f + (boss.rage ? 0.35f : 0.0f));
     float moveAmp = 90.0f + boss.phase * 12.0f + (boss.rage ? 25.0f : 0.0f);
     float bobAmp = 16.0f + boss.phase * 4.0f + (boss.rage ? 8.0f : 0.0f);
@@ -1285,7 +1284,7 @@ static void DrawBoss(void) {
 
     DrawCircleV(boss.pos, boss.radius + 6.0f, glow);
 
-    // Determine which texture and frame to use
+    // Menentukan sprite dan frame berdasarkan state boss
     Texture2D currentTex = texBossMain;
     int frameIndex = 0;
     Color tint = WHITE;
@@ -1391,7 +1390,7 @@ static void handleCollisions(void) {
     for (int b = 0; b < MAX_BULLETS; b++) {
         if (!playerBullets[b].active) continue;
 
-        // Check against boss
+        // Cek terhadap boss
         if (phase == PHASE_BOSS && boss.active && !boss.transforming) {
             if (Dist(playerBullets[b].pos, boss.pos) < BULLET_RADIUS + boss.radius) {
                 Vector2 hitPos = playerBullets[b].pos;
@@ -1407,7 +1406,7 @@ static void handleCollisions(void) {
             }
         }
 
-        // Check against regular enemies
+        // Cek terhadap musuh biasa
         for (int e = 0; e < MAX_ENEMIES; e++) {
             if (!enemies[e].active) continue;
             if (Dist(playerBullets[b].pos, enemies[e].pos) < BULLET_RADIUS + enemies[e].radius) {
